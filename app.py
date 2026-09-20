@@ -1,12 +1,12 @@
 
-import os
-import hmac
-
 from io import BytesIO
+from pathlib import Path
+import hashlib
 
 import streamlit as st
 
 from main import analyze_expenses
+from agent import run_agent
 
 
 # ==========================================
@@ -21,159 +21,39 @@ st.set_page_config(
 
 
 # ==========================================
-# PUBLIC DEPLOYMENT SETTINGS
-# ==========================================
-
-PUBLIC_MODE = (
-    os.getenv(
-        "AGENTFLOW_PUBLIC_DEMO", ""
-    ).strip().lower() == "true"
-)
-
-MAX_DEMO_REQUESTS = 5
-
-
-# ==========================================
-# PUBLIC DEMO ACCESS
-# ==========================================
-
-if PUBLIC_MODE:
-
-    demo_password = os.getenv(
-        "AGENTFLOW_DEMO_PASSWORD", ""
-    )
-
-    if not demo_password:
-
-        st.error(
-            "Demo password is not configured."
-        )
-
-        st.stop()
-
-    if not os.getenv("GEMINI_API_KEY"):
-
-        st.error(
-            "Gemini API is not configured."
-        )
-
-        st.stop()
-
-    if "demo_authorized" not in st.session_state:
-
-        st.session_state.demo_authorized = False
-
-    if "demo_requests" not in st.session_state:
-
-        st.session_state.demo_requests = 0
-
-    if not st.session_state.demo_authorized:
-
-        st.title("🤖 AgentFlow")
-
-        st.subheader(
-            "AI Agent with Tools & Workflow Automation"
-        )
-
-        st.write(
-            "Enter the demonstration password "
-            "to access AgentFlow."
-        )
-
-        entered_password = st.text_input(
-            "Demo access password",
-            type="password"
-        )
-
-        if st.button(
-            "Open AgentFlow",
-            type="primary"
-        ):
-
-            if hmac.compare_digest(
-                entered_password,
-                demo_password
-            ):
-
-                st.session_state.demo_authorized = True
-
-                st.rerun()
-
-            else:
-
-                st.error(
-                    "Incorrect demonstration password."
-                )
-
-        st.stop()
-
-
-# ==========================================
-# IMPORT THE REAL GEMINI AGENT
-# ==========================================
-
-from agent import run_agent
-
-
-# Local database functions are only used
-# outside the public cloud demo.
-
-if not PUBLIC_MODE:
-
-    from task_store import (
-        list_tasks,
-        save_approved_task
-    )
-
-    from note_store import (
-        list_notes,
-        save_approved_note
-    )
-
-
-# ==========================================
 # SESSION STATE
 # ==========================================
 
-if "analysis" not in st.session_state:
+defaults = {
+    "analysis": None,
+    "agent_answer": None,
+    "pending_tasks": [],
+    "pending_notes": [],
+    "saved_tasks": [],
+    "saved_notes": [],
+    "file_signature": None,
+}
 
-    st.session_state.analysis = None
-
-if "agent_answer" not in st.session_state:
-
-    st.session_state.agent_answer = None
-
-if "pending_tasks" not in st.session_state:
-
-    st.session_state.pending_tasks = []
-
-if "pending_notes" not in st.session_state:
-
-    st.session_state.pending_notes = []
-
-if "demo_saved_tasks" not in st.session_state:
-
-    st.session_state.demo_saved_tasks = []
-
-if "demo_saved_notes" not in st.session_state:
-
-    st.session_state.demo_saved_notes = []
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # ==========================================
-# APPLICATION HEADER
+# HEADER
 # ==========================================
 
 st.title("🤖 AgentFlow")
 
 st.subheader(
-    "AI Agent with Tools & Workflow Automation"
+    "AI Agent with Function Calling "
+    "& Workflow Automation"
 )
 
 st.write(
-    "Analyze data using Gemini AI, "
-    "call Python tools, and manage "
-    "tasks and notes with human approval."
+    "Analyze expenses, interact with Gemini AI, "
+    "and manage tasks and notes with "
+    "human approval."
 )
 
 st.link_button(
@@ -181,194 +61,149 @@ st.link_button(
     "https://github.com/caucasianx-99/AgentFlow"
 )
 
+st.info(
+    "Public portfolio demonstration. "
+    "CSV analysis is available without an API key. "
+    "Real AI functionality requires your own "
+    "Gemini API key."
+)
 
-if PUBLIC_MODE:
+st.warning(
+    "Use fictional or non-confidential test data. "
+    "AI instructions and tool results are "
+    "processed by Gemini when AI is enabled."
+)
 
-    st.info(
-        "Public portfolio demonstration. "
-        "This application uses real Gemini AI. "
-        "Approved tasks and notes are temporary "
-        "and private to your current session."
-    )
 
-    remaining = (
-        MAX_DEMO_REQUESTS
-        - st.session_state.demo_requests
-    )
-
-    st.caption(
-        f"AI requests remaining in this session: "
-        f"{remaining}"
-    )
-
-    st.warning(
-        "Use only fictional or non-confidential "
-        "data. Do not upload private financial "
-        "or personal information."
-    )
-
+# ==========================================
+# 1. SELECT DATA
+# ==========================================
 
 st.divider()
 
+st.header("1. Select Your Data")
 
-# ==========================================
-# 1. UPLOAD DATA
-# ==========================================
-
-st.header("1. Upload Your Data")
-
-uploaded_file = st.file_uploader(
-    "Upload an expenses CSV file",
-    type=["csv"]
+use_sample = st.checkbox(
+    "Use fictional sample expenses",
+    value=True
 )
+
+if use_sample:
+
+    sample_path = (
+        Path(__file__).parent
+        / "sample_expenses.csv"
+    )
+
+    csv_bytes = sample_path.read_bytes()
+
+    st.success(
+        "Fictional sample dataset loaded."
+    )
+
+    st.download_button(
+        "Download Sample CSV",
+        data=csv_bytes,
+        file_name="sample_expenses.csv",
+        mime="text/csv"
+    )
+
+else:
+
+    uploaded_file = st.file_uploader(
+        "Upload your expenses CSV",
+        type=["csv"]
+    )
+
+    csv_bytes = (
+        uploaded_file.getvalue()
+        if uploaded_file is not None
+        else None
+    )
 
 st.caption(
-    "Required CSV columns: category, amount"
+    "Required columns: category, amount. "
+    "Maximum file size: 1 MB."
 )
 
 
 # ==========================================
-# 2. USER INSTRUCTION
+# RESET RESULTS WHEN DATA CHANGES
 # ==========================================
 
-st.header("2. Give Your Agent an Instruction")
+if csv_bytes is not None:
 
-user_instruction = st.text_area(
-    "What would you like AgentFlow to do?",
-    placeholder=(
-        "Analyze my expenses, identify the "
-        "highest spending category, and "
-        "propose a task and note for approval."
-    )
+    signature = hashlib.sha256(
+        csv_bytes
+    ).hexdigest()
+
+else:
+
+    signature = None
+
+if signature != st.session_state.file_signature:
+
+    st.session_state.file_signature = signature
+
+    st.session_state.analysis = None
+    st.session_state.agent_answer = None
+    st.session_state.pending_tasks = []
+    st.session_state.pending_notes = []
+
+
+# ==========================================
+# 2. FREE CSV ANALYSIS
+# ==========================================
+
+st.divider()
+
+st.header("2. Free CSV Analysis")
+
+st.write(
+    "Analyze expenses using Python and pandas. "
+    "No Gemini API key is required."
 )
-
-
-# ==========================================
-# RUN AGENT
-# ==========================================
 
 if st.button(
-    "Run Agent",
+    "Analyze CSV",
     type="primary"
 ):
 
-    if uploaded_file is None:
+    if csv_bytes is None:
 
         st.warning(
-            "Please upload a CSV file first."
+            "Please select a CSV file."
         )
 
-    elif not user_instruction.strip():
+    elif len(csv_bytes) > 1_000_000:
 
-        st.warning(
-            "Please enter an instruction."
-        )
-
-    elif (
-        PUBLIC_MODE
-        and st.session_state.demo_requests
-        >= MAX_DEMO_REQUESTS
-    ):
-
-        st.warning(
-            "The demonstration request limit "
-            "has been reached for this session."
+        st.error(
+            "The maximum file size is 1 MB."
         )
 
     else:
 
-        # Clear previous results
-
-        st.session_state.analysis = None
-
-        st.session_state.agent_answer = None
-
-        st.session_state.pending_tasks = []
-
-        st.session_state.pending_notes = []
-
-        csv_bytes = uploaded_file.getvalue()
-
-        # Limit public CSV file size to 1 MB.
-
-        if (
-            PUBLIC_MODE
-            and len(csv_bytes) > 1_000_000
-        ):
-
-            st.error(
-                "The public demo accepts CSV "
-                "files up to 1 MB."
-            )
-
-            st.stop()
-
-        # ----------------------------------
-        # ANALYZE CSV
-        # ----------------------------------
-
         try:
 
-            analysis = analyze_expenses(
+            result = analyze_expenses(
                 BytesIO(csv_bytes)
             )
 
-            st.session_state.analysis = analysis
+            st.session_state.analysis = result
+
+            st.session_state.agent_answer = None
+            st.session_state.pending_tasks = []
+            st.session_state.pending_notes = []
 
         except ValueError as error:
 
             st.error(str(error))
 
-            st.stop()
-
         except Exception:
 
             st.error(
-                "Unable to analyze the CSV file."
+                "Unable to analyze the CSV."
             )
-
-            st.stop()
-
-        # ----------------------------------
-        # RUN REAL GEMINI AGENT
-        # ----------------------------------
-
-        try:
-
-            if PUBLIC_MODE:
-
-                st.session_state.demo_requests += 1
-
-            with st.spinner(
-                "AgentFlow is processing "
-                "your request..."
-            ):
-
-                answer, tasks, notes = run_agent(
-                    csv_bytes,
-                    user_instruction,
-                    return_notes=True
-                )
-
-            st.session_state.agent_answer = answer
-
-            st.session_state.pending_tasks = tasks
-
-            st.session_state.pending_notes = notes
-
-        except Exception as error:
-
-            if PUBLIC_MODE:
-
-                st.error(
-                    "The AI request could not "
-                    "be completed. Please try "
-                    "again later."
-                )
-
-            else:
-
-                st.exception(error)
 
 
 # ==========================================
@@ -383,23 +218,19 @@ if st.session_state.analysis is not None:
 
     st.header("3. Analysis Results")
 
-    st.success(
-        "CSV analysis completed successfully!"
-    )
-
     col1, col2 = st.columns(2)
 
     with col1:
 
         st.metric(
             "Total Spending",
-            f"{analysis['total_spending']:.2f}"
+            f"{analysis['total_spending']:,.2f}"
         )
 
     with col2:
 
         st.metric(
-            "Total Transactions",
+            "Transactions",
             analysis["total_transactions"]
         )
 
@@ -407,50 +238,249 @@ if st.session_state.analysis is not None:
         "Highest Spending Category"
     )
 
-    st.info(
+    st.success(
         f"{analysis['highest_spending_category']}: "
-        f"{analysis['highest_category_amount']:.2f}"
+        f"{analysis['highest_category_amount']:,.2f}"
     )
 
-    st.subheader("Complete Analysis")
+    st.subheader(
+    "Spending by Category"
+    )
+
+    for category, amount in analysis[
+    "spending_by_category"
+    ].items():
+
+     st.write(
+        f"**{category}:** {amount:,.2f}"
+    )
+
+    st.subheader(
+        "Structured Analysis"
+    )
 
     st.json(analysis)
 
 
 # ==========================================
-# 4. AI RESPONSE
+# EXAMPLE AI WORKFLOW
+# ==========================================
+
+st.divider()
+
+with st.expander(
+    "See an example AI workflow"
+):
+
+    st.write(
+        "The following example illustrates "
+        "AgentFlow's tool-calling and "
+        "approval workflow."
+    )
+
+    st.markdown(
+        """
+        **Example instruction**
+
+        Analyze my expenses, identify the
+        highest spending category, and
+        propose a task and summary note.
+
+        **Example result**
+
+        Total spending: 408.00
+
+        Highest category: Shopping — 200.00
+
+        **Proposed task**
+
+        Review Shopping expenses.
+
+        **Proposed note**
+
+        September Expenses Summary.
+
+        Both proposals remain pending until
+        the user explicitly approves them.
+        """
+    )
+
+    st.caption(
+        "This is a predefined example, "
+        "not a live Gemini response."
+    )
+
+
+# ==========================================
+# 4. REAL GEMINI CONNECTION
+# ==========================================
+
+st.divider()
+
+st.header("4. Connect to Gemini AI")
+
+st.write(
+    "Enter your own Gemini API key to use "
+    "AgentFlow's real AI capabilities."
+)
+
+api_key = st.text_input(
+    "Your Gemini API key",
+    type="password",
+    placeholder="Enter your private Gemini API key"
+)
+
+st.caption(
+    "Your key is used for Gemini requests "
+    "during this session. AgentFlow does not "
+    "write it to a file or database. "
+    "The key is processed by this hosted "
+    "application, so use a separate "
+    "restricted test key."
+)
+
+st.link_button(
+    "Get a Gemini API Key",
+    "https://aistudio.google.com/api-keys"
+)
+
+
+# ==========================================
+# 5. USER INSTRUCTION
+# ==========================================
+
+st.header("5. Give Your Agent an Instruction")
+
+user_instruction = st.text_area(
+    "What would you like AgentFlow to do?",
+    placeholder=(
+        "Analyze my expenses using your tools. "
+        "Identify the highest spending category. "
+        "Propose a task and a summary note."
+    ),
+    max_chars=1000
+)
+
+
+# ==========================================
+# RUN REAL GEMINI AGENT
+# ==========================================
+
+if st.button(
+    "Run Real AI Agent"
+):
+
+    if csv_bytes is None:
+
+        st.warning(
+            "Please select a CSV file."
+        )
+
+    elif len(csv_bytes) > 1_000_000:
+
+        st.error(
+            "The maximum file size is 1 MB."
+        )
+
+    elif not api_key.strip():
+
+        st.warning(
+            "Enter your Gemini API key "
+            "to use real AI functionality."
+        )
+
+    elif not user_instruction.strip():
+
+        st.warning(
+            "Please enter an instruction."
+        )
+
+    else:
+
+        try:
+
+            analysis = analyze_expenses(
+                BytesIO(csv_bytes)
+            )
+
+            st.session_state.analysis = analysis
+
+        except ValueError as error:
+
+            st.error(str(error))
+            st.stop()
+
+        except Exception:
+
+            st.error(
+                "Unable to analyze the CSV."
+            )
+            st.stop()
+
+        st.session_state.agent_answer = None
+        st.session_state.pending_tasks = []
+        st.session_state.pending_notes = []
+
+        try:
+
+            with st.spinner(
+                "Gemini is processing "
+                "your request..."
+            ):
+
+                answer, tasks, notes = run_agent(
+                    csv_bytes,
+                    user_instruction,
+                    api_key=api_key,
+                    return_notes=True
+                )
+
+            st.session_state.agent_answer = answer
+            st.session_state.pending_tasks = tasks
+            st.session_state.pending_notes = notes
+
+        except Exception:
+
+            st.error(
+                "The Gemini request failed. "
+                "Check your API key, available "
+                "quota, and model access."
+            )
+
+
+# ==========================================
+# 6. AI RESPONSE
 # ==========================================
 
 if st.session_state.agent_answer:
 
     st.divider()
 
-    st.header("4. AI Agent Response")
+    st.header("6. AI Agent Response")
 
     st.markdown(
         st.session_state.agent_answer
     )
 
     st.caption(
-        "The AI response describes the "
-        "original proposals. Current approval "
-        "status is shown below."
+        "The response describes the original "
+        "proposals. Current approval status "
+        "is shown below."
     )
 
 
 # ==========================================
-# 5. TASK APPROVAL
+# 7. TASK APPROVAL
 # ==========================================
 
 if st.session_state.pending_tasks:
 
     st.divider()
 
-    st.header("5. Pending Task Approval")
+    st.header("7. Pending Task Approval")
 
     st.warning(
-        "The following tasks were proposed "
-        "by AI. Nothing has been saved yet."
+        "Nothing has been saved yet."
     )
 
     for index, title in enumerate(
@@ -470,22 +500,12 @@ if st.session_state.pending_tasks:
                 key=f"approve_task_{index}"
             ):
 
-                if PUBLIC_MODE:
-
-                    st.session_state.demo_saved_tasks.append(
-                        title
-                    )
-
-                else:
-
-                    save_approved_task(title)
+                st.session_state.saved_tasks.append(
+                    title
+                )
 
                 st.session_state.pending_tasks.pop(
                     index
-                )
-
-                st.toast(
-                    "Task approved!"
                 )
 
                 st.rerun()
@@ -501,31 +521,21 @@ if st.session_state.pending_tasks:
                     index
                 )
 
-                st.toast(
-                    "Task rejected."
-                )
-
                 st.rerun()
 
 
 # ==========================================
-# 6. SAVED TASKS
+# 8. APPROVED TASKS
 # ==========================================
 
 st.divider()
 
-st.header(
-    "6. Approved Tasks"
-    if PUBLIC_MODE
-    else "6. Saved Tasks"
-)
+st.header("8. Approved Tasks")
 
-if PUBLIC_MODE:
-
-    saved_tasks = st.session_state.demo_saved_tasks
+if st.session_state.saved_tasks:
 
     for index, title in enumerate(
-        saved_tasks,
+        st.session_state.saved_tasks,
         start=1
     ):
 
@@ -535,40 +545,23 @@ if PUBLIC_MODE:
 
 else:
 
-    saved_tasks = list_tasks()
-
-    for task in saved_tasks:
-
-        st.write(
-            f"**#{task['id']}** — "
-            f"{task['title']}"
-        )
-
-        st.caption(
-            f"Created: {task['created_at']}"
-        )
-
-
-if not saved_tasks:
-
     st.info(
-        "No approved tasks yet."
+        "No approved tasks in this session."
     )
 
 
 # ==========================================
-# 7. NOTE APPROVAL
+# 9. NOTE APPROVAL
 # ==========================================
 
 if st.session_state.pending_notes:
 
     st.divider()
 
-    st.header("7. Pending Note Approval")
+    st.header("9. Pending Note Approval")
 
     st.warning(
-        "The following notes were proposed "
-        "by AI. Nothing has been saved yet."
+        "Nothing has been saved yet."
     )
 
     for index, note in enumerate(
@@ -592,25 +585,12 @@ if st.session_state.pending_notes:
                 key=f"approve_note_{index}"
             ):
 
-                if PUBLIC_MODE:
-
-                    st.session_state.demo_saved_notes.append(
-                        note.copy()
-                    )
-
-                else:
-
-                    save_approved_note(
-                        note["title"],
-                        note["content"]
-                    )
+                st.session_state.saved_notes.append(
+                    note.copy()
+                )
 
                 st.session_state.pending_notes.pop(
                     index
-                )
-
-                st.toast(
-                    "Note approved!"
                 )
 
                 st.rerun()
@@ -626,65 +606,36 @@ if st.session_state.pending_notes:
                     index
                 )
 
-                st.toast(
-                    "Note rejected."
-                )
-
                 st.rerun()
 
 
 # ==========================================
-# 8. SAVED NOTES
+# 10. APPROVED NOTES
 # ==========================================
 
 st.divider()
 
-st.header(
-    "8. Approved Notes"
-    if PUBLIC_MODE
-    else "8. Saved Notes"
-)
+st.header("10. Approved Notes")
 
-if PUBLIC_MODE:
-
-    saved_notes = st.session_state.demo_saved_notes
-
-else:
-
-    saved_notes = list_notes()
-
-
-if saved_notes:
+if st.session_state.saved_notes:
 
     for index, note in enumerate(
-        saved_notes,
+        st.session_state.saved_notes,
         start=1
     ):
 
-        note_id = (
-            index
-            if PUBLIC_MODE
-            else note["id"]
-        )
-
         st.subheader(
-            f"#{note_id} — {note['title']}"
+            f"#{index} — {note['title']}"
         )
 
         st.write(
             note["content"]
         )
 
-        if not PUBLIC_MODE:
-
-            st.caption(
-                f"Created: {note['created_at']}"
-            )
-
 else:
 
     st.info(
-        "No approved notes yet."
+        "No approved notes in this session."
     )
 
 
@@ -692,14 +643,12 @@ else:
 # FOOTER
 # ==========================================
 
-if PUBLIC_MODE:
+st.divider()
 
-    st.divider()
-
-    st.caption(
-        "AgentFlow portfolio demonstration. "
-        "Gemini AI is real. Task and note "
-        "approvals are temporary for this "
-        "browser session and are not stored "
-        "in a permanent cloud database."
-    )
+st.caption(
+    "AgentFlow is an independent portfolio "
+    "demonstration of Gemini function calling, "
+    "Python tools, and human-approved workflows. "
+    "Approved records are temporary and "
+    "specific to the current session."
+)
