@@ -1,0 +1,35 @@
+
+# Virtual environment
+.venv/
+venv/
+
+# API credentials and private environment files
+.env
+.env.*
+!.env.example
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Pytest cache
+.pytest_cache/
+
+# Local SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local logs
+*.log
