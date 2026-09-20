@@ -1,25 +1,17 @@
 
+import os
+import hmac
+
 from io import BytesIO
 
 import streamlit as st
 
 from main import analyze_expenses
-from agent import run_agent
-
-from task_store import (
-    list_tasks,
-    save_approved_task
-)
-
-from note_store import (
-    list_notes,
-    save_approved_note
-)
 
 
-# --------------------------------------------------
+# ==========================================
 # PAGE CONFIGURATION
-# --------------------------------------------------
+# ==========================================
 
 st.set_page_config(
     page_title="AgentFlow",
@@ -28,44 +20,200 @@ st.set_page_config(
 )
 
 
-# --------------------------------------------------
+# ==========================================
+# PUBLIC DEPLOYMENT SETTINGS
+# ==========================================
+
+PUBLIC_MODE = (
+    os.getenv(
+        "AGENTFLOW_PUBLIC_DEMO", ""
+    ).strip().lower() == "true"
+)
+
+MAX_DEMO_REQUESTS = 5
+
+
+# ==========================================
+# PUBLIC DEMO ACCESS
+# ==========================================
+
+if PUBLIC_MODE:
+
+    demo_password = os.getenv(
+        "AGENTFLOW_DEMO_PASSWORD", ""
+    )
+
+    if not demo_password:
+
+        st.error(
+            "Demo password is not configured."
+        )
+
+        st.stop()
+
+    if not os.getenv("GEMINI_API_KEY"):
+
+        st.error(
+            "Gemini API is not configured."
+        )
+
+        st.stop()
+
+    if "demo_authorized" not in st.session_state:
+
+        st.session_state.demo_authorized = False
+
+    if "demo_requests" not in st.session_state:
+
+        st.session_state.demo_requests = 0
+
+    if not st.session_state.demo_authorized:
+
+        st.title("🤖 AgentFlow")
+
+        st.subheader(
+            "AI Agent with Tools & Workflow Automation"
+        )
+
+        st.write(
+            "Enter the demonstration password "
+            "to access AgentFlow."
+        )
+
+        entered_password = st.text_input(
+            "Demo access password",
+            type="password"
+        )
+
+        if st.button(
+            "Open AgentFlow",
+            type="primary"
+        ):
+
+            if hmac.compare_digest(
+                entered_password,
+                demo_password
+            ):
+
+                st.session_state.demo_authorized = True
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "Incorrect demonstration password."
+                )
+
+        st.stop()
+
+
+# ==========================================
+# IMPORT THE REAL GEMINI AGENT
+# ==========================================
+
+from agent import run_agent
+
+
+# Local database functions are only used
+# outside the public cloud demo.
+
+if not PUBLIC_MODE:
+
+    from task_store import (
+        list_tasks,
+        save_approved_task
+    )
+
+    from note_store import (
+        list_notes,
+        save_approved_note
+    )
+
+
+# ==========================================
 # SESSION STATE
-# --------------------------------------------------
+# ==========================================
 
 if "analysis" not in st.session_state:
+
     st.session_state.analysis = None
 
 if "agent_answer" not in st.session_state:
+
     st.session_state.agent_answer = None
 
 if "pending_tasks" not in st.session_state:
+
     st.session_state.pending_tasks = []
 
 if "pending_notes" not in st.session_state:
+
     st.session_state.pending_notes = []
 
+if "demo_saved_tasks" not in st.session_state:
 
-# --------------------------------------------------
+    st.session_state.demo_saved_tasks = []
+
+if "demo_saved_notes" not in st.session_state:
+
+    st.session_state.demo_saved_notes = []
+
+
+# ==========================================
 # APPLICATION HEADER
-# --------------------------------------------------
+# ==========================================
 
-st.title("AgentFlow")
+st.title("🤖 AgentFlow")
 
 st.subheader(
     "AI Agent with Tools & Workflow Automation"
 )
 
 st.write(
-    "Analyze data, interact with AI tools, "
-    "and manage tasks and notes with human approval."
+    "Analyze data using Gemini AI, "
+    "call Python tools, and manage "
+    "tasks and notes with human approval."
 )
+
+st.link_button(
+    "View Source Code on GitHub",
+    "https://github.com/caucasianx-99/AgentFlow"
+)
+
+
+if PUBLIC_MODE:
+
+    st.info(
+        "Public portfolio demonstration. "
+        "This application uses real Gemini AI. "
+        "Approved tasks and notes are temporary "
+        "and private to your current session."
+    )
+
+    remaining = (
+        MAX_DEMO_REQUESTS
+        - st.session_state.demo_requests
+    )
+
+    st.caption(
+        f"AI requests remaining in this session: "
+        f"{remaining}"
+    )
+
+    st.warning(
+        "Use only fictional or non-confidential "
+        "data. Do not upload private financial "
+        "or personal information."
+    )
+
 
 st.divider()
 
 
-# --------------------------------------------------
-# 1. CSV UPLOAD
-# --------------------------------------------------
+# ==========================================
+# 1. UPLOAD DATA
+# ==========================================
 
 st.header("1. Upload Your Data")
 
@@ -74,28 +222,35 @@ uploaded_file = st.file_uploader(
     type=["csv"]
 )
 
+st.caption(
+    "Required CSV columns: category, amount"
+)
 
-# --------------------------------------------------
+
+# ==========================================
 # 2. USER INSTRUCTION
-# --------------------------------------------------
+# ==========================================
 
 st.header("2. Give Your Agent an Instruction")
 
 user_instruction = st.text_area(
     "What would you like AgentFlow to do?",
     placeholder=(
-        "Analyze my expenses, identify the highest "
-        "spending category, and propose a task "
-        "and note for my approval."
+        "Analyze my expenses, identify the "
+        "highest spending category, and "
+        "propose a task and note for approval."
     )
 )
 
 
-# --------------------------------------------------
-# RUN THE AI AGENT
-# --------------------------------------------------
+# ==========================================
+# RUN AGENT
+# ==========================================
 
-if st.button("Run Agent", type="primary"):
+if st.button(
+    "Run Agent",
+    type="primary"
+):
 
     if uploaded_file is None:
 
@@ -109,18 +264,48 @@ if st.button("Run Agent", type="primary"):
             "Please enter an instruction."
         )
 
+    elif (
+        PUBLIC_MODE
+        and st.session_state.demo_requests
+        >= MAX_DEMO_REQUESTS
+    ):
+
+        st.warning(
+            "The demonstration request limit "
+            "has been reached for this session."
+        )
+
     else:
 
-        # Clear previous results and proposals
+        # Clear previous results
 
         st.session_state.analysis = None
+
         st.session_state.agent_answer = None
+
         st.session_state.pending_tasks = []
+
         st.session_state.pending_notes = []
 
         csv_bytes = uploaded_file.getvalue()
 
-        # Analyze the uploaded CSV
+        # Limit public CSV file size to 1 MB.
+
+        if (
+            PUBLIC_MODE
+            and len(csv_bytes) > 1_000_000
+        ):
+
+            st.error(
+                "The public demo accepts CSV "
+                "files up to 1 MB."
+            )
+
+            st.stop()
+
+        # ----------------------------------
+        # ANALYZE CSV
+        # ----------------------------------
 
         try:
 
@@ -130,25 +315,36 @@ if st.button("Run Agent", type="primary"):
 
             st.session_state.analysis = analysis
 
-        except Exception as error:
+        except ValueError as error:
+
+            st.error(str(error))
+
+            st.stop()
+
+        except Exception:
 
             st.error(
                 "Unable to analyze the CSV file."
             )
 
-            st.exception(error)
-
             st.stop()
 
-        # Run Gemini with Python tools
+        # ----------------------------------
+        # RUN REAL GEMINI AGENT
+        # ----------------------------------
 
         try:
 
+            if PUBLIC_MODE:
+
+                st.session_state.demo_requests += 1
+
             with st.spinner(
-                "AgentFlow is processing your request..."
+                "AgentFlow is processing "
+                "your request..."
             ):
 
-                answer, proposals, notes = run_agent(
+                answer, tasks, notes = run_agent(
                     csv_bytes,
                     user_instruction,
                     return_notes=True
@@ -156,22 +352,28 @@ if st.button("Run Agent", type="primary"):
 
             st.session_state.agent_answer = answer
 
-            st.session_state.pending_tasks = proposals
+            st.session_state.pending_tasks = tasks
 
             st.session_state.pending_notes = notes
 
         except Exception as error:
 
-            st.error(
-                "The AI request failed."
-            )
+            if PUBLIC_MODE:
 
-            st.exception(error)
+                st.error(
+                    "The AI request could not "
+                    "be completed. Please try "
+                    "again later."
+                )
+
+            else:
+
+                st.exception(error)
 
 
-# --------------------------------------------------
+# ==========================================
 # 3. ANALYSIS RESULTS
-# --------------------------------------------------
+# ==========================================
 
 if st.session_state.analysis is not None:
 
@@ -215,9 +417,9 @@ if st.session_state.analysis is not None:
     st.json(analysis)
 
 
-# --------------------------------------------------
-# 4. AI AGENT RESPONSE
-# --------------------------------------------------
+# ==========================================
+# 4. AI RESPONSE
+# ==========================================
 
 if st.session_state.agent_answer:
 
@@ -229,10 +431,16 @@ if st.session_state.agent_answer:
         st.session_state.agent_answer
     )
 
+    st.caption(
+        "The AI response describes the "
+        "original proposals. Current approval "
+        "status is shown below."
+    )
 
-# --------------------------------------------------
-# 5. PENDING TASK APPROVAL
-# --------------------------------------------------
+
+# ==========================================
+# 5. TASK APPROVAL
+# ==========================================
 
 if st.session_state.pending_tasks:
 
@@ -241,16 +449,16 @@ if st.session_state.pending_tasks:
     st.header("5. Pending Task Approval")
 
     st.warning(
-        "The following tasks were proposed by AI. "
-        "Nothing has been saved yet."
+        "The following tasks were proposed "
+        "by AI. Nothing has been saved yet."
     )
 
-    for index, task_title in enumerate(
+    for index, title in enumerate(
         st.session_state.pending_tasks
     ):
 
         st.write(
-            f"**Proposed task:** {task_title}"
+            f"**Proposed task:** {title}"
         )
 
         col1, col2 = st.columns(2)
@@ -258,20 +466,26 @@ if st.session_state.pending_tasks:
         with col1:
 
             if st.button(
-                "Approve",
+                "Approve Task",
                 key=f"approve_task_{index}"
             ):
 
-                result = save_approved_task(
-                    task_title
-                )
+                if PUBLIC_MODE:
+
+                    st.session_state.demo_saved_tasks.append(
+                        title
+                    )
+
+                else:
+
+                    save_approved_task(title)
 
                 st.session_state.pending_tasks.pop(
                     index
                 )
 
                 st.toast(
-                    f"Task #{result['id']} saved!"
+                    "Task approved!"
                 )
 
                 st.rerun()
@@ -279,7 +493,7 @@ if st.session_state.pending_tasks:
         with col2:
 
             if st.button(
-                "Reject",
+                "Reject Task",
                 key=f"reject_task_{index}"
             ):
 
@@ -288,23 +502,40 @@ if st.session_state.pending_tasks:
                 )
 
                 st.toast(
-                    "Task rejected. Nothing was saved."
+                    "Task rejected."
                 )
 
                 st.rerun()
 
 
-# --------------------------------------------------
+# ==========================================
 # 6. SAVED TASKS
-# --------------------------------------------------
+# ==========================================
 
 st.divider()
 
-st.header("6. Saved Tasks")
+st.header(
+    "6. Approved Tasks"
+    if PUBLIC_MODE
+    else "6. Saved Tasks"
+)
 
-saved_tasks = list_tasks()
+if PUBLIC_MODE:
 
-if saved_tasks:
+    saved_tasks = st.session_state.demo_saved_tasks
+
+    for index, title in enumerate(
+        saved_tasks,
+        start=1
+    ):
+
+        st.write(
+            f"**#{index}** — {title}"
+        )
+
+else:
+
+    saved_tasks = list_tasks()
 
     for task in saved_tasks:
 
@@ -317,16 +548,17 @@ if saved_tasks:
             f"Created: {task['created_at']}"
         )
 
-else:
+
+if not saved_tasks:
 
     st.info(
-        "No approved tasks have been saved yet."
+        "No approved tasks yet."
     )
 
 
-# --------------------------------------------------
-# 7. PENDING NOTE APPROVAL
-# --------------------------------------------------
+# ==========================================
+# 7. NOTE APPROVAL
+# ==========================================
 
 if st.session_state.pending_notes:
 
@@ -335,8 +567,8 @@ if st.session_state.pending_notes:
     st.header("7. Pending Note Approval")
 
     st.warning(
-        "The following notes were proposed by AI. "
-        "Nothing has been saved yet."
+        "The following notes were proposed "
+        "by AI. Nothing has been saved yet."
     )
 
     for index, note in enumerate(
@@ -360,17 +592,25 @@ if st.session_state.pending_notes:
                 key=f"approve_note_{index}"
             ):
 
-                result = save_approved_note(
-                    note["title"],
-                    note["content"]
-                )
+                if PUBLIC_MODE:
+
+                    st.session_state.demo_saved_notes.append(
+                        note.copy()
+                    )
+
+                else:
+
+                    save_approved_note(
+                        note["title"],
+                        note["content"]
+                    )
 
                 st.session_state.pending_notes.pop(
                     index
                 )
 
                 st.toast(
-                    f"Note #{result['id']} saved!"
+                    "Note approved!"
                 )
 
                 st.rerun()
@@ -387,40 +627,79 @@ if st.session_state.pending_notes:
                 )
 
                 st.toast(
-                    "Note rejected. Nothing was saved."
+                    "Note rejected."
                 )
 
                 st.rerun()
 
 
-# --------------------------------------------------
+# ==========================================
 # 8. SAVED NOTES
-# --------------------------------------------------
+# ==========================================
 
 st.divider()
 
-st.header("8. Saved Notes")
+st.header(
+    "8. Approved Notes"
+    if PUBLIC_MODE
+    else "8. Saved Notes"
+)
 
-saved_notes = list_notes()
+if PUBLIC_MODE:
+
+    saved_notes = st.session_state.demo_saved_notes
+
+else:
+
+    saved_notes = list_notes()
+
 
 if saved_notes:
 
-    for note in saved_notes:
+    for index, note in enumerate(
+        saved_notes,
+        start=1
+    ):
+
+        note_id = (
+            index
+            if PUBLIC_MODE
+            else note["id"]
+        )
 
         st.subheader(
-            f"#{note['id']} — {note['title']}"
+            f"#{note_id} — {note['title']}"
         )
 
         st.write(
             note["content"]
         )
 
-        st.caption(
-            f"Created: {note['created_at']}"
-        )
+        if not PUBLIC_MODE:
+
+            st.caption(
+                f"Created: {note['created_at']}"
+            )
 
 else:
 
     st.info(
-        "No approved notes have been saved yet."
+        "No approved notes yet."
+    )
+
+
+# ==========================================
+# FOOTER
+# ==========================================
+
+if PUBLIC_MODE:
+
+    st.divider()
+
+    st.caption(
+        "AgentFlow portfolio demonstration. "
+        "Gemini AI is real. Task and note "
+        "approvals are temporary for this "
+        "browser session and are not stored "
+        "in a permanent cloud database."
     )
